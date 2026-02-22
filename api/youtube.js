@@ -22,11 +22,16 @@ export default async function handler(req, res) {
 
   try {
     const player = await getPlayerData(videoId);
-    if (!player) throw new Error();
+    if (!player?.streamingData) throw new Error('No streaming data');
 
     const formats = [];
 
-    for (const f of player.streamingData.adaptiveFormats || []) {
+    const allFormats = [
+      ...(player.streamingData.formats || []),
+      ...(player.streamingData.adaptiveFormats || [])
+    ];
+
+    for (const f of allFormats) {
       if (!f.url) continue;
 
       formats.push({
@@ -36,6 +41,8 @@ export default async function handler(req, res) {
         download_url: `/api/download?url=${encodeURIComponent(f.url)}`
       });
     }
+
+    if (!formats.length) throw new Error('No formats');
 
     res.json({
       status: 'success',
@@ -47,27 +54,37 @@ export default async function handler(req, res) {
       channel: '@NasirTech765'
     });
 
-  } catch {
+  } catch (err) {
     res.status(500).json({
       status: 'error',
       message: 'Failed to extract video',
+      reason: err.message,
       channel: '@NasirTech765'
     });
   }
 }
 
+// ================= HELPERS =================
+
 function extractVideoId(url) {
-  const m = url.match(/(v=|\/)([0-9A-Za-z_-]{11})/);
-  return m ? m[2] : null;
+  const match = url.match(
+    /(?:v=|\/)([0-9A-Za-z_-]{11})(?:\?|&|$)/
+  );
+  return match ? match[1] : null;
 }
 
 async function getPlayerData(videoId) {
   const html = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' }
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Accept-Language': 'en-US,en;q=0.9'
+    }
   }).then(r => r.text());
 
-  const match = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/);
-  if (!match) return null;
+  // 🔥 Robust extraction (works with new layouts)
+  const split = html.split('ytInitialPlayerResponse = ');
+  if (split.length < 2) return null;
 
-  return JSON.parse(match[1]);
+  const jsonText = split[1].split(';</script>')[0];
+  return JSON.parse(jsonText);
 }
