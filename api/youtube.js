@@ -1,14 +1,11 @@
-
-// api/youtube.js - Complete file with CORS proxy integration
-// CORS Proxy: https://corsproxy.io/?key=7b5d8d31&url=
-
+// api/youtube.js - COMPLETE VERSION with all extraction methods + your own proxy
 export default async function handler(req, res) {
-  // Enable CORS for all responses
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle OPTIONS request (preflight)
+  // Handle OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -19,7 +16,14 @@ export default async function handler(req, res) {
   }
 
   const youtubeUrl = req.query.url;
-  const useProxy = req.query.proxy !== 'false'; // Enable proxy by default
+  const videoId = req.query.videoId;
+  const download = req.query.download === 'true';
+  const quality = req.query.quality || 'best';
+
+  // =========== DIRECT VIDEO STREAMING ENDPOINT ===========
+  if (download && videoId) {
+    return await streamVideo(videoId, quality, res);
+  }
 
   if (!youtubeUrl) {
     return res.status(400).json({
@@ -30,8 +34,8 @@ export default async function handler(req, res) {
     });
   }
 
-  const videoId = extractVideoId(youtubeUrl);
-  if (!videoId) {
+  const extractedVideoId = extractVideoId(youtubeUrl);
+  if (!extractedVideoId) {
     return res.status(400).json({
       status: 'error',
       message: 'Invalid YouTube URL',
@@ -41,88 +45,183 @@ export default async function handler(req, res) {
 
   try {
     // Method 1: Direct YouTube streaming data extraction
-    const result1 = await extractYouTubeStreamingData(videoId, useProxy);
-    if (result1) {
-      // Process URLs through proxy if needed
-      if (useProxy && result1.formats) {
-        result1.formats = result1.formats.map(format => ({
-          ...format,
-          url: `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(format.url)}`,
-          original_url: format.url // Keep original for reference
-        }));
-      }
-      return res.json({ 
-        ...result1, 
+    console.log('Trying method 1: Direct extraction...');
+    const result1 = await extractYouTubeStreamingData(extractedVideoId);
+    if (result1 && result1.formats && result1.formats.length > 0) {
+      // Add streaming URLs
+      result1.formats = result1.formats.map(format => ({
+        ...format,
+        stream_url: `/api/youtube?download=true&videoId=${extractedVideoId}&quality=${format.quality}`,
+        original_url: format.url
+      }));
+      
+      return res.json({
+        ...result1,
         channel: '@NasirTech765',
-        proxy_enabled: useProxy,
-        proxy_url: useProxy ? 'https://corsproxy.io/?key=7b5d8d31&url=' : null
+        proxy_type: 'self-hosted',
+        message: 'Use stream_url for guaranteed playback'
       });
     }
 
     // Method 2: YouTube player API
-    const result2 = await getYouTubePlayerData(videoId);
+    console.log('Trying method 2: Player API...');
+    const result2 = await getYouTubePlayerData(extractedVideoId);
     if (result2) {
-      if (useProxy && result2.direct_download) {
-        result2.proxied_download = `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(result2.direct_download)}`;
-      }
-      return res.json({ ...result2, channel: '@NasirTech765', proxy_enabled: useProxy });
+      return res.json({
+        ...result2,
+        channel: '@NasirTech765',
+        proxy_type: 'self-hosted',
+        stream_url: `/api/youtube?download=true&videoId=${extractedVideoId}`
+      });
     }
 
     // Method 3: YouTube embed data
-    const result3 = await getYouTubeEmbedData(videoId);
+    console.log('Trying method 3: Embed data...');
+    const result3 = await getYouTubeEmbedData(extractedVideoId);
     if (result3) {
-      if (useProxy && result3.download_tools) {
-        result3.proxied_tools = result3.download_tools.map(tool => 
-          `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(tool)}`
-        );
-      }
-      return res.json({ ...result3, channel: '@NasirTech765', proxy_enabled: useProxy });
+      return res.json({
+        ...result3,
+        channel: '@NasirTech765',
+        proxy_type: 'self-hosted',
+        stream_url: `/api/youtube?download=true&videoId=${extractedVideoId}`
+      });
     }
 
     // Method 4: Using invidious instance
-    const result4 = await tryInvidious(videoId);
-    if (result4) {
-      if (useProxy && result4.formats) {
-        result4.formats = result4.formats.map(format => ({
-          ...format,
-          url: `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(format.url)}`,
-          original_url: format.url
-        }));
-      }
-      return res.json({ ...result4, channel: '@NasirTech765', proxy_enabled: useProxy });
+    console.log('Trying method 4: Invidious...');
+    const result4 = await tryInvidious(extractedVideoId);
+    if (result4 && result4.formats && result4.formats.length > 0) {
+      result4.formats = result4.formats.map(format => ({
+        ...format,
+        stream_url: `/api/youtube?download=true&videoId=${extractedVideoId}&quality=${format.quality}`,
+        original_url: format.url
+      }));
+      
+      return res.json({
+        ...result4,
+        channel: '@NasirTech765',
+        proxy_type: 'self-hosted'
+      });
     }
 
   } catch (err) {
     console.log('All methods failed:', err.message);
   }
 
-  // Final fallback with proxied links
+  // Final fallback - provide direct tools
   const directTools = [
-    `https://ssyoutube.com/watch?v=${videoId}`,
-    `https://y2mate.com/youtube/${videoId}`,
-    `https://en.y2mate.net/youtube/${videoId}`,
-    `https://yt5s.com/en?q=https://youtube.com/watch?v=${videoId}`
+    `https://ssyoutube.com/watch?v=${extractedVideoId}`,
+    `https://y2mate.com/youtube/${extractedVideoId}`,
+    `https://en.y2mate.net/youtube/${extractedVideoId}`,
+    `https://yt5s.com/en?q=https://youtube.com/watch?v=${extractedVideoId}`
   ];
-
-  const proxiedTools = useProxy ? directTools.map(tool => 
-    `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(tool)}`
-  ) : directTools;
 
   return res.json({
     status: 'info',
-    message: 'Use these direct tools for download',
-    videoId: videoId,
+    message: 'Direct extraction failed. Use these tools or try our proxy:',
+    videoId: extractedVideoId,
     direct_tools: directTools,
-    proxied_tools: proxiedTools,
+    our_proxy: `/api/youtube?download=true&videoId=${extractedVideoId}`,
     quick_method: 'Add "ss" before youtube in URL',
-    example: `https://ssyoutube.com/watch?v=${videoId}`,
-    channel: '@NasirTech765',
-    proxy_enabled: useProxy,
-    proxy_url: useProxy ? 'https://corsproxy.io/?key=7b5d8d31&url=' : null
+    example: `https://ssyoutube.com/watch?v=${extractedVideoId}`,
+    channel: '@NasirTech765'
   });
 }
 
-// Extract video ID from various YouTube URL formats
+// =========== VIDEO STREAMING FUNCTION (YOUR OWN PROXY) ===========
+async function streamVideo(videoId, requestedQuality, res) {
+  try {
+    console.log(`Streaming video: ${videoId} at quality: ${requestedQuality}`);
+    
+    // First, get fresh video URLs using all methods
+    let videoData = null;
+    
+    // Try method 1
+    videoData = await extractYouTubeStreamingData(videoId);
+    
+    // Try method 4 if method 1 fails
+    if (!videoData || !videoData.formats || videoData.formats.length === 0) {
+      videoData = await tryInvidious(videoId);
+    }
+
+    if (!videoData || !videoData.formats || videoData.formats.length === 0) {
+      return res.status(404).json({ error: 'No video formats found' });
+    }
+
+    // Select video format (prefer video-only, then highest quality)
+    let selectedFormat = null;
+    
+    if (requestedQuality !== 'best') {
+      // Try to find requested quality
+      selectedFormat = videoData.formats.find(f => 
+        f.quality === requestedQuality && !f.audio
+      );
+    }
+    
+    if (!selectedFormat) {
+      // Get best quality video (non-audio)
+      selectedFormat = videoData.formats
+        .filter(f => !f.audio)
+        .sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+    }
+    
+    if (!selectedFormat) {
+      // Fallback to any format
+      selectedFormat = videoData.formats[0];
+    }
+
+    if (!selectedFormat || !selectedFormat.url) {
+      return res.status(404).json({ error: 'No video URL found' });
+    }
+
+    console.log('Selected format:', selectedFormat.quality);
+    console.log('Fetching from:', selectedFormat.url);
+
+    // Fetch the video through YOUR server
+    const videoResponse = await fetch(selectedFormat.url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'video/webm,video/mp4,video/*;q=0.9,application/octet-stream;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://www.youtube.com',
+        'Connection': 'keep-alive',
+        'Range': 'bytes=0-'
+      }
+    });
+
+    if (!videoResponse.ok) {
+      throw new Error(`Failed to fetch video: ${videoResponse.status} ${videoResponse.statusText}`);
+    }
+
+    // Get video as buffer
+    const videoBuffer = await videoResponse.arrayBuffer();
+    
+    // Set proper headers for video download/streaming
+    const filename = `${videoData.title || 'video'}_${selectedFormat.quality || '720p'}.mp4`
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    
+    res.setHeader('Content-Type', selectedFormat.type || 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', videoBuffer.byteLength);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'no-cache');
+    
+    // Send the video
+    return res.send(Buffer.from(videoBuffer));
+
+  } catch (error) {
+    console.error('Streaming error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to stream video',
+      details: error.message 
+    });
+  }
+}
+
+// =========== EXTRACTION FUNCTIONS ===========
+
+// Extract video ID from URL
 function extractVideoId(url) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?#]+)/,
@@ -139,16 +238,11 @@ function extractVideoId(url) {
 }
 
 // Method 1: Extract streaming data directly from YouTube
-async function extractYouTubeStreamingData(videoId, useProxy = true) {
+async function extractYouTubeStreamingData(videoId) {
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Use proxy for the initial request if needed
-    const fetchUrl = useProxy 
-      ? `https://corsproxy.io/?key=7b5d8d31&url=${encodeURIComponent(videoUrl)}`
-      : videoUrl;
-    
-    const response = await fetch(fetchUrl, {
+    const response = await fetch(videoUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -273,9 +367,7 @@ function processYouTubePlayerData(playerData, videoId, title) {
       author: videoDetails.author || '',
       thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
       formats: formats,
-      source: 'youtube-direct',
-      message: 'Direct streaming links from YouTube',
-      note: 'Use with CORS proxy for direct playback'
+      source: 'youtube-direct'
     };
   }
 
@@ -317,7 +409,6 @@ async function getYouTubePlayerData(videoId) {
             title: title,
             thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
             message: 'Video information extracted',
-            direct_download: `https://ssyoutube.com/watch?v=${videoId}`,
             source: 'youtube-embed'
           };
         }
@@ -349,12 +440,6 @@ async function getYouTubeEmbedData(videoId) {
         title: data.title || 'YouTube Video',
         author: data.author_name || '',
         thumbnail: data.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-        message: 'Use direct download tools below',
-        download_tools: [
-          `https://ssyoutube.com/watch?v=${videoId}`,
-          `https://y2mate.com/youtube/${videoId}`,
-          `https://en.y2mate.net/youtube/${videoId}`
-        ],
         source: 'youtube-oembed'
       };
     }
@@ -372,7 +457,8 @@ async function tryInvidious(videoId) {
       'https://invidious.snopyta.org',
       'https://yewtu.be',
       'https://invidiou.site',
-      'https://invidious.nerdvpn.de'
+      'https://invidious.nerdvpn.de',
+      'https://inv.riverside.rocks'
     ];
 
     for (const instance of instances) {
@@ -388,6 +474,8 @@ async function tryInvidious(videoId) {
           const data = await response.json();
           
           const formats = [];
+          
+          // Extract video formats
           if (data.formatStreams) {
             data.formatStreams.forEach(stream => {
               if (stream.url) {
@@ -402,10 +490,10 @@ async function tryInvidious(videoId) {
             });
           }
           
-          // Also check for audio-only formats
+          // Extract audio formats
           if (data.adaptiveFormats) {
             data.adaptiveFormats.forEach(stream => {
-              if (stream.url && stream.type.includes('audio')) {
+              if (stream.url && stream.type?.includes('audio')) {
                 formats.push({
                   quality: stream.quality || 'audio',
                   url: stream.url,
@@ -417,23 +505,32 @@ async function tryInvidious(videoId) {
             });
           }
 
+          // Get best thumbnail
+          let thumbnail = `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
+          if (data.videoThumbnails && data.videoThumbnails.length > 0) {
+            const bestThumb = data.videoThumbnails.find(t => t.quality === 'maxres') || 
+                            data.videoThumbnails[0];
+            thumbnail = bestThumb.url;
+          }
+
           return {
             status: 'success',
             videoId: videoId,
             title: data.title || 'YouTube Video',
             duration: data.duration ? formatDuration(data.duration) : '',
             author: data.author || '',
-            thumbnail: data.videoThumbnails ? data.videoThumbnails[0]?.url : `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+            thumbnail: thumbnail,
             formats: formats,
             source: 'invidious'
           };
         }
       } catch (err) {
+        console.log(`Invidious instance ${instance} failed:`, err.message);
         continue; // Try next instance
       }
     }
   } catch (err) {
-    console.log('Invidious failed:', err.message);
+    console.log('Invidious all instances failed:', err.message);
   }
   return null;
 }
