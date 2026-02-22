@@ -1,0 +1,12 @@
+{
+  "name": "youtube-api-vercel",
+  "version": "1.0.0",
+  "description": "YouTube video info API for Vercel",
+  "main": "api/youtube.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "keywords": ["youtube", "api", "vercel", "serverless"],
+  "author": "NASIR_HACKER",
+  "license": "MIT"
+}
