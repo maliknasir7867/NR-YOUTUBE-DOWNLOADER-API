@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   if (!youtubeUrl) {
     return res.status(400).json({
       status: 'error',
-      message: 'YouTube URL is required',
+      message: 'YouTube URL required',
       channel: '@NasirTech765'
     });
   }
@@ -22,27 +22,51 @@ export default async function handler(req, res) {
 
   try {
     const player = await getPlayerData(videoId);
-    if (!player?.streamingData) throw new Error('No streaming data');
+    const streaming = player?.streamingData;
+
+    if (!streaming) throw new Error('No streaming data');
 
     const formats = [];
 
     const allFormats = [
-      ...(player.streamingData.formats || []),
-      ...(player.streamingData.adaptiveFormats || [])
+      ...(streaming.formats || []),
+      ...(streaming.adaptiveFormats || [])
     ];
 
     for (const f of allFormats) {
-      if (!f.url) continue;
+      // ✅ Direct URL available (rare but works)
+      if (f.url) {
+        formats.push(buildFormat(f));
+        continue;
+      }
 
-      formats.push({
-        quality: f.qualityLabel || (f.mimeType.includes('audio') ? 'audio' : 'unknown'),
-        mimeType: f.mimeType,
-        audio: f.mimeType.includes('audio'),
-        download_url: `/api/download?url=${encodeURIComponent(f.url)}`
-      });
+      // ⚠️ Ciphered format (cannot decrypt without yt-dlp logic)
+      if (f.signatureCipher) {
+        const params = new URLSearchParams(f.signatureCipher);
+        const url = params.get('url');
+
+        if (url) {
+          formats.push({
+            quality: f.qualityLabel || 'ciphered',
+            mimeType: f.mimeType,
+            audio: f.mimeType.includes('audio'),
+            note: 'Ciphered stream – may not play',
+            download_url: `/api/download?url=${encodeURIComponent(url)}`
+          });
+        }
+      }
     }
 
-    if (!formats.length) throw new Error('No formats');
+    if (!formats.length) {
+      return res.json({
+        status: 'limited',
+        message: 'This video uses encrypted streams',
+        solution: 'High quality downloads require signature decryption',
+        recommend: 'Use yt-dlp or external tools',
+        videoId,
+        channel: '@NasirTech765'
+      });
+    }
 
     res.json({
       status: 'success',
@@ -67,9 +91,7 @@ export default async function handler(req, res) {
 // ================= HELPERS =================
 
 function extractVideoId(url) {
-  const match = url.match(
-    /(?:v=|\/)([0-9A-Za-z_-]{11})(?:\?|&|$)/
-  );
+  const match = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/);
   return match ? match[1] : null;
 }
 
@@ -81,10 +103,17 @@ async function getPlayerData(videoId) {
     }
   }).then(r => r.text());
 
-  // 🔥 Robust extraction (works with new layouts)
   const split = html.split('ytInitialPlayerResponse = ');
   if (split.length < 2) return null;
 
-  const jsonText = split[1].split(';</script>')[0];
-  return JSON.parse(jsonText);
+  return JSON.parse(split[1].split(';</script>')[0]);
+}
+
+function buildFormat(f) {
+  return {
+    quality: f.qualityLabel || (f.mimeType.includes('audio') ? 'audio' : 'unknown'),
+    mimeType: f.mimeType,
+    audio: f.mimeType.includes('audio'),
+    download_url: `/api/download?url=${encodeURIComponent(f.url)}`
+  };
 }
